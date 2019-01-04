@@ -1,15 +1,16 @@
 program pas2yaml;
-
+
 {$APPTYPE CONSOLE}
 
 //tip: for testing, use these params (simulation without shell)
-//  pas2yaml.exe test.flag ./test/src.pas ./test/result.pas
-//or, with shell mode:
 //  pas2yaml.exe shell test.flag
-//and enter the following line in the commandline:
-//  ./test/src.pas ./test/result.pas
+//and enter the following lines in the commandline:
+// ./test/src.pas
+// UTF-8
+// ./test/result.pas
 
 uses
+  Windows,
   Classes,
   SysUtils,
   IOUtils,
@@ -17,82 +18,107 @@ uses
   PasToYamlParser in 'PasToYamlParser.pas';
 
 var
-  i: Integer;
-  bShell: Boolean;
-  sFlagFile, sLine: string;
-  sFileToParse, sOutputFile: string;
+  DebugFn: string = '';
+
+procedure DebugLog(const _s: string);
+begin
+{$IFDEF DEBUG}
+  TFile.AppendAllText(DebugFn, _s + #13);
+{$ENDIF}
+end;
+
+///<summary>
+/// Reads a line from stdin
+/// @param Line is the line that was read
+/// @returns true, if a line could be read
+///          false, if 'end' was read
+/// @raises Exception if INPUT reaches EOF or more the 10 empty lines were read. </summary>
+
+function TryReadLine(out _Line: string): boolean;
+const
+  MaxEmptyCnt = 10;
+var
+  EmptyCnt: Integer;
+begin
+  Result := False;
+  _Line := '';
+  EmptyCnt := 0;
+  while _Line = '' do begin
+    if Eof(INPUT) then
+      raise Exception.Create('Exiting because INPUT reached EOF.');
+    ReadLn(_Line);
+    DebugLog('Received line: ' + _Line);
+    if _Line = 'end' then
+      Exit; //==>
+    if _Line = '' then begin
+      inc(EmptyCnt);
+      if EmptyCnt >= MaxEmptyCnt then
+        raise Exception.CreateFmt('Exiting after reading %d empty lines', [EmptyCnt]);
+    end;
+  end;
+  Result := True;
+end;
+
+function TryReadFileSet(out _InputFn, _Encoding, _OutputFn: string): boolean;
+begin
+  Result := TryReadLine(_InputFn)
+    and TryReadLine(_Encoding)
+    and TryReadLine(_OutputFn);
+end;
+
+var
+  sFlagFile: string;
+  GivenEncoding: string;
+  sFileToParse: string;
+  sOutputFile: string;
   parser: TPas2YamlParser;
-  //strYaml: TStringBuilder;
-  strmstring, strmstring2: TStringStream;
+  strmstring: TStringStream;
+  strmstring2: TStringStream;
   sData: string;
 begin
   try
-    bShell := False;
+    DebugFn := paramstr(0) + '-debug.log';
     sFileToParse := '';
-    sOutputFile  := '';
+    GivenEncoding := '';
+    sOutputFile := '';
     // there are two arguments to consider:
     // 1) "shell" saying you must run in "shell mode"
     //    - don't exit basically and wait for commands
     // 2) A "flag file" - write it when you're done just
     //    in case you need initialization (like starting
-    //    up the Java VM
-    for i := 1 to ParamCount do
-    begin
-      if SameText('shell', ParamStr(i)) then
-        bShell := True
-      else
-      begin
-        if sFlagFile = '' then
-          sFlagFile := ParamStr(i)
-        //in case shell=false we assume we get filenames via params (for easier debugging)
-        else if sLine = '' then
-          sLine := ParamStr(i)
-        else if sOutputFile = '' then
-          sOutputFile := ParamStr(i)
-      end;
-    end;
+    //    up the Java VM)
+    if ParamCount < 1 then
+      raise Exception.Create('Required parameters are missing.');
+    if ParamCount > 2 then
+      raise Exception.Create('Unexpected additional parameters.');
+
+    if not SameText('shell', paramstr(1)) then
+      raise Exception.Create('Required first parameter "shell" is missing.');
+
+    if ParamCount = 2 then
+      sFlagFile := paramstr(2)
+    else
+      sFlagFile := '';
 
     //create stuff
-    parser     := TPas2YamlParser.Create;
+    parser := TPas2YamlParser.Create;
     strmstring := TStringStream.Create;
-    //strYaml    := TStringBuilder.Create;
     try
       // Write the "flagfile" when you're ready
       if sFlagFile <> '' then
         TFile.WriteAllText(sFlagFile, 'READY');
-      //debug:
-      TFile.AppendAllText('debug.log', 'READY'#13);
+      DebugLog('READY');
 
       // Loop until Semantic writes "end"
-      if bShell then
-        Readln(sLine);
-      //debug:
-      TFile.AppendAllText('debug.log', 'Received line: ' + sLine +#13);
-      while sLine <> 'end' do
-      begin
-        with TStringList.Create do
-        begin
-          Delimiter     := ' ';
-          DelimitedText := sLine;
-          if Count > 1 then
-          begin
-            sFileToParse := Strings[0];
-            sOutputFile  := Strings[1];
-          end;
-          Free;
-        end;
+      while TryReadFileSet(sFileToParse, GivenEncoding, sOutputFile) do begin
+        DebugLog('Received inputfile: ' + sFileToParse);
+        DebugLog('Received encoding: ' + GivenEncoding);
+        DebugLog('Received outputfile: ' + sOutputFile);
 
-        // read the file to parse first
-        if sFileToParse = '' then
-          sFileToParse := sLine;
-        // then where to put the resulting tree
-        if bShell and (sOutputFile = '') then
-          ReadLn(sOutputFile);
-        //debug:
-        TFile.AppendAllText('debug.log', 'Received outputfile: ' + sOutputFile +#13);
+        if FileExists(sOutputFile) then
+          raise Exception.Create('Output file already exists, cowardly refusing to overwrite it.');
 
         // load the file
-        //strYaml.Clear;
         strmstring.LoadFromFile(sFileToParse);
         sData := strmstring.DataString;
         strmstring.Clear;
@@ -110,38 +136,32 @@ begin
           strmstring2.Free;
         end;
 
-        //debug:
-        TFile.AppendAllText('debug.log', 'Parsed and writing to outputfile: ' + sOutputFile +#13);
+        DebugLog('Parsed and writing to outputfile: ' + sOutputFile);
         // Write the result to "outputFile"
         TFile.WriteAllText(sOutputFile, parser.Yaml.Generate(''));
-        TFile.WriteAllText(ExtractFileName(sFileToParse) + '.tree', parser.Yaml.Generate(''));
-        //strYaml.Clear;
         // write OK when you're done or KO if it didn't work
         WriteLn('OK');
-        Flush(Output);  //important!
+        Flush(Output); //important!
 
-        if not bShell then Break;
-        Readln(sLine);
-        //debug:
-        TFile.AppendAllText('debug.log', 'Received line: ' + sLine +#13);
-        sFileToParse := '';
-        sOutputFile  := '';
+        DebugLog('wrote OK');
+        DebugLog('READY');
       end;
     finally
-      //strYaml.Free;
       strmstring.Free;
       parser.Free;
     end;
 
   except
-    on E: Exception do
-    begin
-      //debug:
-      TFile.AppendAllText('debug.log', 'Exception: ' + e.Message +#13);
+    on E: Exception do begin
+      DebugLog('Exception: ' + E.classname + ' ' + E.Message);
 
       WriteLn('KO');
-      Writeln(E.ClassName, ': ', E.Message);
-      Flush(Output);  //important!
+      WriteLn(E.classname, ': ', E.Message);
+      Flush(Output); //important!
+
+      DebugLog('wrote KO');
     end;
   end;
 end.
+
+
