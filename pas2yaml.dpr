@@ -48,7 +48,8 @@ begin
       raise Exception.Create('Exiting because INPUT reached EOF.');
     ReadLn(_Line);
     DebugLog('Received line: ' + _Line);
-    if _Line = 'end' then
+    _Line := Trim(_Line);
+    if SameText(_Line, 'end') then
       Exit; //==>
     if _Line = '' then begin
       inc(EmptyCnt);
@@ -76,6 +77,10 @@ var
   strmstring2: TStringStream;
   sData: string;
 begin
+{$IFDEF EXTERNALDEBUG}
+  MessageBox(0, PChar('attach debugger now'), PChar(''), MB_ICONWARNING or MB_OK);
+{$ENDIF}
+
   try
     DebugFn := paramstr(0) + '-debug.log';
     sFileToParse := '';
